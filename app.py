@@ -8,6 +8,7 @@ import json
 import re
 import tempfile
 import os
+import hashlib
 
 # ==========================================
 # 1. KONFIGURASI HALAMAN & LAYOUT STREAMLIT
@@ -203,6 +204,19 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
     if not auth_dict or not isinstance(auth_dict, dict):
         raise ValueError("⚠️ Cookie tidak dapat dibaca. Pastikan Anda menempelkan hasil dari `copy(document.cookie)` di tab Console.")
 
+    # Hitung SAPISIDHASH secara otomatis jika Authorization belum ada
+    cookie_str = auth_dict.get("Cookie", auth_dict.get("cookie", ""))
+    if "Authorization" not in auth_dict and "authorization" not in auth_dict and cookie_str:
+        sapisid_match = re.search(r"(?:SAPISID|__Secure-3PAPISID)=([^;\s]+)", cookie_str)
+        if sapisid_match:
+            sapisid = sapisid_match.group(1)
+            timestamp = str(int(time.time()))
+            payload = f"{timestamp} {sapisid} https://music.youtube.com"
+            auth_hash = hashlib.sha1(payload.encode("utf-8")).hexdigest()
+            auth_header = f"SAPISIDHASH {timestamp}_{auth_hash}"
+            auth_dict["Authorization"] = auth_header
+            auth_dict["authorization"] = auth_header
+
     # Pastikan key standar ada di kedua format case
     if "Cookie" in auth_dict:
         auth_dict["cookie"] = auth_dict["Cookie"]
@@ -211,17 +225,18 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
     if "User-Agent" in auth_dict:
         auth_dict["user-agent"] = auth_dict["User-Agent"]
 
-    # Gunakan temporary file sementara agar 100% kompatibel dengan parser internal ytmusicapi
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".json") as f:
-        json.dump(auth_dict, f)
-        temp_path = f.name
-
+    # Buat file sementara, flush & close agar file lengkap terisi sebelum dibaca ytmusicapi
+    temp_file = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json")
     try:
-        yt_instance = YTMusic(auth=temp_path)
+        json.dump(auth_dict, temp_file)
+        temp_file.flush()
+        temp_file.close() # Pastikan buffer tertulis sempurna dan file ditutup
+        
+        yt_instance = YTMusic(auth=temp_file.name)
     finally:
-        if os.path.exists(temp_path):
+        if os.path.exists(temp_file.name):
             try:
-                os.remove(temp_path)
+                os.remove(temp_file.name)
             except Exception:
                 pass
 
