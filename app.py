@@ -108,22 +108,39 @@ def fetch_all_spotify_tracks(sp: spotipy.Spotify, playlist_id: str):
 
 
 def parse_raw_headers_to_dict(raw_headers_text: str) -> dict:
-    """Parser otomatis dari Raw Request Headers browser ke Dictionary Python."""
+    """
+    Parser universal untuk men-decode JSON, Raw Headers, cURL Command, atau fetch() JavaScript.
+    """
     headers = {}
+
+    # 1. Cek apakah format cURL (misal: Copy as cURL (cmd / bash / powershell))
+    curl_matches = re.findall(r"(?:-H|--header)\s+['\"]([^'\"]+)['\"]", raw_headers_text, re.IGNORECASE)
+    if curl_matches:
+        for item in curl_matches:
+            if ":" in item:
+                k, v = item.split(":", 1)
+                headers[k.strip()] = v.strip()
+        if headers:
+            return headers
+
+    # 2. Cek format Raw Headers biasa (baris per baris Key: Value)
     lines = raw_headers_text.strip().splitlines()
     for line in lines:
         if ":" in line:
             line_clean = line.lstrip()
-            if line_clean.startswith(":"):
+            if line_clean.startswith(":") or line_clean.startswith("-H") or line_clean.startswith("curl"):
                 continue
             key, val = line_clean.split(":", 1)
             headers[key.strip()] = val.strip()
+            
     return headers
 
 
 def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
-    """Inisialisasi YTMusic dari JSON String atau Raw Browser Headers."""
+    """Inisialisasi YTMusic dari JSON String, cURL Copy, atau Raw Browser Headers."""
     auth_input = auth_input.strip()
+    
+    # Coba parse sebagai JSON
     if auth_input.startswith("{"):
         try:
             auth_dict = json.loads(auth_input)
@@ -131,6 +148,7 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
         except Exception:
             pass
 
+    # Parse cURL / Raw Headers
     headers_dict = parse_raw_headers_to_dict(auth_input)
     if "cookie" in [k.lower() for k in headers_dict.keys()] or "authorization" in [k.lower() for k in headers_dict.keys()]:
         return YTMusic(auth=json.dumps(headers_dict))
@@ -156,8 +174,8 @@ with st.sidebar:
         "**Tanpa buat file JSON!**\n"
         "1. Buka [music.youtube.com](https://music.youtube.com) (sudah login Google).\n"
         "2. Tekan **F12** (Developer Tools) -> Tab **Network**.\n"
-        "3. Klik kanan request (misal `browse`) -> **Copy request headers**.\n"
-        "4. Paste di kolom *Tempel Raw Request Headers / String JSON*."
+        "3. Klik kanan request `browse` -> **Copy** -> **Copy as cURL (bash / cmd)**.\n"
+        "4. Paste di kolom *Tempel Request Headers / cURL*."
     )
 
 
@@ -173,11 +191,9 @@ tab_setup, tab_convert = st.tabs(["1. Konfigurasi Input & Autentikasi", "2. Ekse
 with tab_setup:
     st.subheader("📋 1. Input Link Playlist Spotify")
 
-    # Ambil credentials dari st.secrets (jika ada)
     secret_client_id = st.secrets.get("SPOTIPY_CLIENT_ID", "")
     secret_client_secret = st.secrets.get("SPOTIPY_CLIENT_SECRET", "")
 
-    # Jika sudah diset di secrets.toml, sembunyikan kolom input dan gunakan otomatis!
     if secret_client_id and secret_client_secret:
         client_id = secret_client_id
         client_secret = secret_client_secret
@@ -227,17 +243,17 @@ with tab_setup:
 
     auth_method = st.radio(
         "Pilih Metode Autentikasi YT Music:",
-        ["Tempel (Paste) Raw Request Headers / JSON String (Paling Praktis)", "Unggah File (headers_auth.json / oauth.json)"],
+        ["Tempel (Paste) Request Headers / cURL / JSON (Paling Praktis)", "Unggah File (headers_auth.json / oauth.json)"],
         horizontal=True
     )
 
     yt_auth_content = None
 
-    if auth_method == "Tempel (Paste) Raw Request Headers / JSON String (Paling Praktis)":
+    if auth_method == "Tempel (Paste) Request Headers / cURL / JSON (Paling Praktis)":
         raw_headers_pasted = st.text_area(
-            "Tempelkan Request Headers dari Browser (atau JSON Auth) di sini:",
+            "Tempelkan cURL / Request Headers di sini:",
             height=200,
-            placeholder="Accept: */*\nAccept-Encoding: gzip, deflate, br\nAuthorization: SAPISIDHASH ...\nCookie: VISITOR_INFO1_LIVE=...; SID=...; SAPISID=...\nUser-Agent: Mozilla/5.0 ..."
+            placeholder="Pilih 'Copy as cURL (bash)' di browser DevTools lalu paste seluruh isinya di sini..."
         )
         if raw_headers_pasted.strip():
             yt_auth_content = raw_headers_pasted.strip()
