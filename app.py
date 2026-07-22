@@ -66,6 +66,16 @@ if not check_password():
 # 3. FUNGSI HELPER & PARSER IN-MEMORY
 # ==========================================
 
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Content-Type": "application/json",
+    "X-Goog-AuthUser": "0",
+    "x-origin": "https://music.youtube.com"
+}
+
+
 def extract_spotify_playlist_id(url_or_id: str) -> str:
     """Eksktrak Playlist ID dari URL Spotify."""
     url_or_id = url_or_id.strip()
@@ -108,25 +118,17 @@ def fetch_all_spotify_tracks(sp: spotipy.Spotify, playlist_id: str):
 
 
 def parse_raw_headers_to_dict(raw_headers_text: str) -> dict:
-    """
-    Parser universal untuk men-decode JSON, Raw Headers, cURL (bash/cmd/powershell), atau fetch().
-    """
+    """Parser universal untuk men-decode JSON, Raw Headers, atau cURL."""
     headers = {}
-
-    # Bersihkan karakter escape Windows CMD (^" -> ")
     text_clean = raw_headers_text.replace('^"', '"').replace("^'", "'").replace('^', '')
 
-    # 1. Ekstrak dari sintaks cURL (-H "key: val" atau -H 'key: val')
     curl_matches = re.findall(r"(?:-H|--header)\s+['\"]?([^'\"\r\n]+)['\"]?", text_clean, re.IGNORECASE)
     if curl_matches:
         for item in curl_matches:
             if ":" in item:
                 k, v = item.split(":", 1)
                 headers[k.strip()] = v.strip()
-        if "cookie" in [k.lower() for k in headers.keys()] or "authorization" in [k.lower() for k in headers.keys()]:
-            return headers
 
-    # 2. Fallback parser baris per baris (Key: Value)
     lines = raw_headers_text.strip().splitlines()
     for line in lines:
         line_clean = line.strip()
@@ -145,15 +147,26 @@ def parse_raw_headers_to_dict(raw_headers_text: str) -> dict:
     return headers
 
 
+def extract_cookie_string(text: str) -> str:
+    """Mencari string Cookie dari cURL, Headers, atau Cookie mentah dari Console."""
+    # 1. Cek baris header 'Cookie:'
+    cookie_match = re.search(r"(?:cookie|-h\s+['\"]?cookie)['\"]?\s*:\s*([^'\";\r\n]+(?:;[^'\";\r\n]+)*)", text, re.IGNORECASE)
+    if cookie_match:
+        return cookie_match.group(1).strip()
+    
+    # 2. Cek apakah input berupa Cookie mentah dari Console (misal ada SID= atau SAPISID= atau VISITOR_INFO)
+    if "SAPISID=" in text or "SID=" in text or "__Secure-3PAPISID=" in text or "VISITOR_INFO1_LIVE=" in text:
+        clean_text = re.sub(r"^cookie:\s*", "", text.strip(), flags=re.IGNORECASE)
+        return clean_text.strip()
+        
+    return ""
+
+
 def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
-    """Inisialisasi YTMusic dari JSON String, cURL Copy, atau Raw Browser Headers."""
+    """Inisialisasi YTMusic fleksibel dari cURL, Cookie Console, atau JSON File."""
     auth_input = auth_input.strip()
 
-    # Deteksi kesalahan umum jika user meng-copy tab Payload/Body
-    if "rolloutToken" in auth_input or "screenWidthPoints" in auth_input or "deviceExperimentId" in auth_input:
-        raise ValueError("Teks yang Anda tempelkan adalah 'Request Payload' (isi data). Harap copy dari tab 'Headers' atau gunakan 'Copy as cURL (bash)' di list Network DevTools.")
-    
-    # Coba parse sebagai JSON
+    # 1. Coba parse sebagai JSON utuh
     if auth_input.startswith("{"):
         try:
             auth_dict = json.loads(auth_input)
@@ -161,14 +174,34 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
         except Exception:
             pass
 
-    # Parse cURL / Raw Headers
+    # 2. Parse cURL / Raw Headers
     headers_dict = parse_raw_headers_to_dict(auth_input)
     
-    keys_lower = [k.lower() for k in headers_dict.keys()]
-    if "cookie" in keys_lower or "authorization" in keys_lower:
-        return YTMusic(auth=json.dumps(headers_dict))
-    
-    raise ValueError("Tidak ditemukan header 'Cookie' yang valid. Pastikan Anda meng-copy cURL dari request 'browse' saat sudah ter-login di music.youtube.com.")
+    # Cari nilai cookie
+    cookie_val = ""
+    for k, v in headers_dict.items():
+        if k.lower() == "cookie":
+            cookie_val = v
+            break
+            
+    if not cookie_val:
+        cookie_val = extract_cookie_string(auth_input)
+        
+    if cookie_val:
+        merged_headers = DEFAULT_HEADERS.copy()
+        merged_headers["Cookie"] = cookie_val
+        for k, v in headers_dict.items():
+            if k.lower() == "authorization":
+                merged_headers["Authorization"] = v
+        return YTMusic(auth=json.dumps(merged_headers))
+
+    raise ValueError(
+        "⚠️ Header Cookie tidak ditemukan pada cURL yang di-copy (terjadi karena ServiceWorker/Disk Cache browser).\n\n"
+        "⚡ CARA TERMUDAH & 100% BERHASIL:\n"
+        "1. Buka tab Console di F12 (pada music.youtube.com).\n"
+        "2. Ketik perintah: copy(document.cookie) lalu tekan Enter.\n"
+        "3. Tempelkan (Paste) hasil copy tersebut di kolom teks ini!"
+    )
 
 
 # ==========================================
@@ -184,13 +217,13 @@ with st.sidebar:
         st.rerun()
         
     st.divider()
-    st.markdown("### 💡 Cara Termudah Login YT Music")
+    st.markdown("### ⚡ Cara Paling Pasti (1 Klik)")
     st.markdown(
-        "**Tanpa buat file JSON!**\n"
-        "1. Buka [music.youtube.com](https://music.youtube.com) (sudah login Google).\n"
-        "2. Tekan **F12** (Developer Tools) -> Tab **Network**.\n"
-        "3. Klik kanan request `browse` -> **Copy** -> **Copy as cURL (bash)**.\n"
-        "4. Paste di kolom *Tempel Request Headers / cURL*."
+        "Jika cURL gagal karena Disk Cache:\n"
+        "1. Buka [music.youtube.com](https://music.youtube.com).\n"
+        "2. Tekan **F12** -> Tab **Console**.\n"
+        "3. Ketik: `copy(document.cookie)` lalu Enter.\n"
+        "4. **Paste** di kolom *Tempel Cookie / cURL*."
     )
 
 
@@ -258,17 +291,17 @@ with tab_setup:
 
     auth_method = st.radio(
         "Pilih Metode Autentikasi YT Music:",
-        ["Tempel (Paste) Request Headers / cURL / JSON (Paling Praktis)", "Unggah File (headers_auth.json / oauth.json)"],
+        ["Tempel (Paste) Cookie Browser / cURL / JSON (Paling Praktis)", "Unggah File (headers_auth.json / oauth.json)"],
         horizontal=True
     )
 
     yt_auth_content = None
 
-    if auth_method == "Tempel (Paste) Request Headers / cURL / JSON (Paling Praktis)":
+    if auth_method == "Tempel (Paste) Cookie Browser / cURL / JSON (Paling Praktis)":
         raw_headers_pasted = st.text_area(
-            "Tempelkan cURL / Request Headers di sini:",
-            height=200,
-            placeholder="Pilih 'Copy as cURL (bash)' pada request 'browse' di browser DevTools lalu paste di sini..."
+            "Tempelkan Cookie Browser / cURL di sini:",
+            height=180,
+            placeholder="Salin hasil 'copy(document.cookie)' dari F12 Console atau cURL lalu tempelkan di sini..."
         )
         if raw_headers_pasted.strip():
             yt_auth_content = raw_headers_pasted.strip()
