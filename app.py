@@ -92,9 +92,16 @@ def extract_spotify_playlist_id(url_or_id: str) -> str:
 
 def fetch_all_spotify_tracks(sp: spotipy.Spotify, playlist_id: str):
     """Mengambil seluruh lagu dari playlist Spotify (Pagination 2.000+ lagu)."""
-    playlist_info = sp.playlist(playlist_id, fields="name,description,tracks.total")
+    playlist_info = {"name": "Spotify Playlist", "description": ""}
+    
+    # Coba ambil metadata playlist (fallback jika 403)
+    try:
+        playlist_info = sp.playlist(playlist_id, fields="name,description,tracks.total")
+    except Exception:
+        pass
+
     tracks_data = []
-    results = sp.playlist_items(playlist_id, additional_types=['track'])
+    results = sp.playlist_items(playlist_id)
     
     while results:
         for item in results.get('items', []):
@@ -230,7 +237,7 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
     try:
         json.dump(auth_dict, temp_file)
         temp_file.flush()
-        temp_file.close() # Pastikan buffer tertulis sempurna dan file ditutup
+        temp_file.close()
         
         yt_instance = YTMusic(auth=temp_file.name)
     finally:
@@ -315,7 +322,16 @@ with tab_setup:
                     st.session_state["spotify_tracks"] = tracks_data
                     st.success(f"✅ Berhasil memuat {len(tracks_data)} lagu dari playlist '{playlist_info.get('name')}'!")
                 except Exception as e:
-                    st.error(f"Gagal mengambil data dari Spotify: {e}")
+                    err_msg = str(e)
+                    if "Active premium subscription required" in err_msg:
+                        st.error(
+                            "❌ **Penyebab Error Spotify API**: "
+                            "Kebijakan baru Spotify mensyaratkan bahwa akun Spotify Developer (pemilik `SPOTIPY_CLIENT_ID`) "
+                            "harus merupakan **Akun Spotify Premium**.\n\n"
+                            "👉 **Solusi**: Gunakan Client ID & Secret yang dibuat dari akun Spotify berstatus Premium (di https://developer.spotify.com/dashboard)."
+                        )
+                    else:
+                        st.error(f"Gagal mengambil data dari Spotify: {e}")
 
     if "spotify_tracks" in st.session_state and st.session_state["spotify_tracks"]:
         tracks = st.session_state["spotify_tracks"]
