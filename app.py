@@ -6,6 +6,8 @@ import pandas as pd
 import time
 import json
 import re
+import tempfile
+import os
 
 # ==========================================
 # 1. KONFIGURASI HALAMAN & LAYOUT STREAMLIT
@@ -150,22 +152,17 @@ def parse_raw_headers_to_dict(raw_headers_text: str) -> dict:
 def extract_cookie_string(text: str) -> str:
     """Mencari string Cookie lengkap dari cURL, Headers, atau Cookie mentah dari Console."""
     text_clean = text.strip()
-    
-    # Hapus awalan 'Cookie:' jika ada
     text_clean = re.sub(r"^cookie:\s*", "", text_clean, flags=re.IGNORECASE).strip()
     
-    # Cek jika ada format -H "cookie: ..."
     h_cookie = re.search(r"(?:-H|--header)\s+['\"]?cookie:\s*([^'\"]+)['\"]?", text_clean, re.IGNORECASE)
     if h_cookie:
         return h_cookie.group(1).strip()
         
-    # Cek baris demi baris
     for line in text_clean.splitlines():
         line_s = line.strip()
         if line_s.lower().startswith("cookie:"):
             return line_s[7:].strip()
             
-    # Cek penanda cookie khas YT Music (SAPISID, SID, APISID)
     if "SAPISID=" in text_clean or "SID=" in text_clean or "__Secure-3PAPISID=" in text_clean or "APISID=" in text_clean:
         return text_clean.strip("'\"")
 
@@ -175,41 +172,60 @@ def extract_cookie_string(text: str) -> str:
 def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
     """Inisialisasi YTMusic fleksibel dari cURL, Cookie Console, atau JSON File."""
     auth_input = auth_input.strip()
+    auth_dict = None
 
-    # 1. Coba parse sebagai JSON utuh jika berupa format dict/headers_auth.json
+    # 1. Coba parse sebagai JSON utuh
     if auth_input.startswith("{"):
         try:
             auth_dict = json.loads(auth_input)
-            if isinstance(auth_dict, dict):
-                # Pastikan minimal ada User-Agent dan Cookie di JSON
-                if "User-Agent" not in auth_dict and "user-agent" not in auth_dict:
-                    auth_dict["User-Agent"] = DEFAULT_HEADERS["User-Agent"]
-                return YTMusic(auth=json.dumps(auth_dict))
         except Exception:
             pass
 
-    # 2. Parse cURL / Raw Headers
-    headers_dict = parse_raw_headers_to_dict(auth_input)
-    
-    # Cari nilai cookie
-    cookie_val = ""
-    for k, v in headers_dict.items():
-        if k.lower() == "cookie":
-            cookie_val = v
-            break
-            
-    if not cookie_val:
-        cookie_val = extract_cookie_string(auth_input)
-        
-    if cookie_val:
-        merged_headers = DEFAULT_HEADERS.copy()
-        merged_headers["Cookie"] = cookie_val
+    # 2. Jika bukan JSON utuh, parse cURL / Cookie String
+    if not isinstance(auth_dict, dict):
+        headers_dict = parse_raw_headers_to_dict(auth_input)
+        cookie_val = ""
         for k, v in headers_dict.items():
-            if k.lower() == "authorization":
-                merged_headers["Authorization"] = v
-        return YTMusic(auth=json.dumps(merged_headers))
+            if k.lower() == "cookie":
+                cookie_val = v
+                break
+                
+        if not cookie_val:
+            cookie_val = extract_cookie_string(auth_input)
+            
+        if cookie_val:
+            auth_dict = DEFAULT_HEADERS.copy()
+            auth_dict["Cookie"] = cookie_val
+            for k, v in headers_dict.items():
+                if k.lower() == "authorization":
+                    auth_dict["Authorization"] = v
 
-    raise ValueError("⚠️ Cookie tidak dapat dibaca. Pastikan Anda menempelkan hasil dari `copy(document.cookie)` di tab Console.")
+    if not auth_dict or not isinstance(auth_dict, dict):
+        raise ValueError("⚠️ Cookie tidak dapat dibaca. Pastikan Anda menempelkan hasil dari `copy(document.cookie)` di tab Console.")
+
+    # Pastikan key standar ada di kedua format case
+    if "Cookie" in auth_dict:
+        auth_dict["cookie"] = auth_dict["Cookie"]
+    if "cookie" in auth_dict:
+        auth_dict["Cookie"] = auth_dict["cookie"]
+    if "User-Agent" in auth_dict:
+        auth_dict["user-agent"] = auth_dict["User-Agent"]
+
+    # Gunakan temporary file sementara agar 100% kompatibel dengan parser internal ytmusicapi
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".json") as f:
+        json.dump(auth_dict, f)
+        temp_path = f.name
+
+    try:
+        yt_instance = YTMusic(auth=temp_path)
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+    return yt_instance
 
 
 # ==========================================
