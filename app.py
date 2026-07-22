@@ -148,17 +148,27 @@ def parse_raw_headers_to_dict(raw_headers_text: str) -> dict:
 
 
 def extract_cookie_string(text: str) -> str:
-    """Mencari string Cookie dari cURL, Headers, atau Cookie mentah dari Console."""
-    # 1. Cek baris header 'Cookie:'
-    cookie_match = re.search(r"(?:cookie|-h\s+['\"]?cookie)['\"]?\s*:\s*([^'\";\r\n]+(?:;[^'\";\r\n]+)*)", text, re.IGNORECASE)
-    if cookie_match:
-        return cookie_match.group(1).strip()
+    """Mencari string Cookie lengkap dari cURL, Headers, atau Cookie mentah dari Console."""
+    text_clean = text.strip()
     
-    # 2. Cek apakah input berupa Cookie mentah dari Console (misal ada SID= atau SAPISID= atau VISITOR_INFO)
-    if "SAPISID=" in text or "SID=" in text or "__Secure-3PAPISID=" in text or "VISITOR_INFO1_LIVE=" in text:
-        clean_text = re.sub(r"^cookie:\s*", "", text.strip(), flags=re.IGNORECASE)
-        return clean_text.strip()
+    # Hapus awalan 'Cookie:' jika ada
+    text_clean = re.sub(r"^cookie:\s*", "", text_clean, flags=re.IGNORECASE).strip()
+    
+    # Cek jika ada format -H "cookie: ..."
+    h_cookie = re.search(r"(?:-H|--header)\s+['\"]?cookie:\s*([^'\"]+)['\"]?", text_clean, re.IGNORECASE)
+    if h_cookie:
+        return h_cookie.group(1).strip()
         
+    # Cek baris demi baris
+    for line in text_clean.splitlines():
+        line_s = line.strip()
+        if line_s.lower().startswith("cookie:"):
+            return line_s[7:].strip()
+            
+    # Cek penanda cookie khas YT Music (SAPISID, SID, APISID)
+    if "SAPISID=" in text_clean or "SID=" in text_clean or "__Secure-3PAPISID=" in text_clean or "APISID=" in text_clean:
+        return text_clean.strip("'\"")
+
     return ""
 
 
@@ -166,11 +176,15 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
     """Inisialisasi YTMusic fleksibel dari cURL, Cookie Console, atau JSON File."""
     auth_input = auth_input.strip()
 
-    # 1. Coba parse sebagai JSON utuh
+    # 1. Coba parse sebagai JSON utuh jika berupa format dict/headers_auth.json
     if auth_input.startswith("{"):
         try:
             auth_dict = json.loads(auth_input)
-            return YTMusic(auth=json.dumps(auth_dict))
+            if isinstance(auth_dict, dict):
+                # Pastikan minimal ada User-Agent dan Cookie di JSON
+                if "User-Agent" not in auth_dict and "user-agent" not in auth_dict:
+                    auth_dict["User-Agent"] = DEFAULT_HEADERS["User-Agent"]
+                return YTMusic(auth=json.dumps(auth_dict))
         except Exception:
             pass
 
@@ -195,13 +209,7 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
                 merged_headers["Authorization"] = v
         return YTMusic(auth=json.dumps(merged_headers))
 
-    raise ValueError(
-        "⚠️ Header Cookie tidak ditemukan pada cURL yang di-copy (terjadi karena ServiceWorker/Disk Cache browser).\n\n"
-        "⚡ CARA TERMUDAH & 100% BERHASIL:\n"
-        "1. Buka tab Console di F12 (pada music.youtube.com).\n"
-        "2. Ketik perintah: copy(document.cookie) lalu tekan Enter.\n"
-        "3. Tempelkan (Paste) hasil copy tersebut di kolom teks ini!"
-    )
+    raise ValueError("⚠️ Cookie tidak dapat dibaca. Pastikan Anda menempelkan hasil dari `copy(document.cookie)` di tab Console.")
 
 
 # ==========================================
@@ -219,7 +227,6 @@ with st.sidebar:
     st.divider()
     st.markdown("### ⚡ Cara Paling Pasti (1 Klik)")
     st.markdown(
-        "Jika cURL gagal karena Disk Cache:\n"
         "1. Buka [music.youtube.com](https://music.youtube.com).\n"
         "2. Tekan **F12** -> Tab **Console**.\n"
         "3. Ketik: `copy(document.cookie)` lalu Enter.\n"
