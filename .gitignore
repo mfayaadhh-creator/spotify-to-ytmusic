@@ -1,0 +1,5 @@
+# Ignored files for Streamlit deployment
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+.env
