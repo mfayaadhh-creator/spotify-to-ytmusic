@@ -110,7 +110,6 @@ def fetch_all_spotify_tracks(sp: spotipy.Spotify, playlist_id: str):
 def parse_raw_headers_to_dict(raw_headers_text: str) -> dict:
     """
     Parser universal untuk men-decode JSON, Raw Headers, cURL (bash/cmd/powershell), atau fetch().
-    Mendukung sintaks Windows cURL dengan karakter escape ^".
     """
     headers = {}
 
@@ -133,7 +132,6 @@ def parse_raw_headers_to_dict(raw_headers_text: str) -> dict:
         line_clean = line.strip()
         if line_clean.startswith(":") or line_clean.startswith("curl"):
             continue
-        # Jika ada format -H "Cookie: ..."
         if line_clean.startswith("-H") or line_clean.startswith("--header"):
             sub_match = re.search(r"['\"]?([a-zA-Z0-9\-_]+)\s*:\s*(.+?)['\"]?$", line_clean)
             if sub_match:
@@ -150,8 +148,12 @@ def parse_raw_headers_to_dict(raw_headers_text: str) -> dict:
 def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
     """Inisialisasi YTMusic dari JSON String, cURL Copy, atau Raw Browser Headers."""
     auth_input = auth_input.strip()
+
+    # Deteksi kesalahan umum jika user meng-copy tab Payload/Body
+    if "rolloutToken" in auth_input or "screenWidthPoints" in auth_input or "deviceExperimentId" in auth_input:
+        raise ValueError("Teks yang Anda tempelkan adalah 'Request Payload' (isi data). Harap copy dari tab 'Headers' atau gunakan 'Copy as cURL (bash)' di list Network DevTools.")
     
-    # Coba parse sebagai JSON terlebih dahulu
+    # Coba parse sebagai JSON
     if auth_input.startswith("{"):
         try:
             auth_dict = json.loads(auth_input)
@@ -162,12 +164,11 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
     # Parse cURL / Raw Headers
     headers_dict = parse_raw_headers_to_dict(auth_input)
     
-    # Pastikan minimal ada cookie atau authorization
     keys_lower = [k.lower() for k in headers_dict.keys()]
     if "cookie" in keys_lower or "authorization" in keys_lower:
         return YTMusic(auth=json.dumps(headers_dict))
     
-    raise ValueError("Tidak ditemukan header 'Cookie' atau 'Authorization' pada teks yang Anda tempelkan. Pastikan Anda meng-copy cURL dari request 'browse' atau 'account_menu'.")
+    raise ValueError("Tidak ditemukan header 'Cookie' yang valid. Pastikan Anda meng-copy cURL dari request 'browse' saat sudah ter-login di music.youtube.com.")
 
 
 # ==========================================
