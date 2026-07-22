@@ -109,27 +109,38 @@ def fetch_all_spotify_tracks(sp: spotipy.Spotify, playlist_id: str):
 
 def parse_raw_headers_to_dict(raw_headers_text: str) -> dict:
     """
-    Parser universal untuk men-decode JSON, Raw Headers, cURL Command, atau fetch() JavaScript.
+    Parser universal untuk men-decode JSON, Raw Headers, cURL (bash/cmd/powershell), atau fetch().
+    Mendukung sintaks Windows cURL dengan karakter escape ^".
     """
     headers = {}
 
-    # 1. Cek apakah format cURL (misal: Copy as cURL (cmd / bash / powershell))
-    curl_matches = re.findall(r"(?:-H|--header)\s+['\"]([^'\"]+)['\"]", raw_headers_text, re.IGNORECASE)
+    # Bersihkan karakter escape Windows CMD (^" -> ")
+    text_clean = raw_headers_text.replace('^"', '"').replace("^'", "'").replace('^', '')
+
+    # 1. Ekstrak dari sintaks cURL (-H "key: val" atau -H 'key: val')
+    curl_matches = re.findall(r"(?:-H|--header)\s+['\"]?([^'\"\r\n]+)['\"]?", text_clean, re.IGNORECASE)
     if curl_matches:
         for item in curl_matches:
             if ":" in item:
                 k, v = item.split(":", 1)
                 headers[k.strip()] = v.strip()
-        if headers:
+        if "cookie" in [k.lower() for k in headers.keys()] or "authorization" in [k.lower() for k in headers.keys()]:
             return headers
 
-    # 2. Cek format Raw Headers biasa (baris per baris Key: Value)
+    # 2. Fallback parser baris per baris (Key: Value)
     lines = raw_headers_text.strip().splitlines()
     for line in lines:
-        if ":" in line:
-            line_clean = line.lstrip()
-            if line_clean.startswith(":") or line_clean.startswith("-H") or line_clean.startswith("curl"):
-                continue
+        line_clean = line.strip()
+        if line_clean.startswith(":") or line_clean.startswith("curl"):
+            continue
+        # Jika ada format -H "Cookie: ..."
+        if line_clean.startswith("-H") or line_clean.startswith("--header"):
+            sub_match = re.search(r"['\"]?([a-zA-Z0-9\-_]+)\s*:\s*(.+?)['\"]?$", line_clean)
+            if sub_match:
+                headers[sub_match.group(1).strip()] = sub_match.group(2).strip()
+            continue
+
+        if ":" in line_clean:
             key, val = line_clean.split(":", 1)
             headers[key.strip()] = val.strip()
             
@@ -140,7 +151,7 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
     """Inisialisasi YTMusic dari JSON String, cURL Copy, atau Raw Browser Headers."""
     auth_input = auth_input.strip()
     
-    # Coba parse sebagai JSON
+    # Coba parse sebagai JSON terlebih dahulu
     if auth_input.startswith("{"):
         try:
             auth_dict = json.loads(auth_input)
@@ -150,10 +161,13 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
 
     # Parse cURL / Raw Headers
     headers_dict = parse_raw_headers_to_dict(auth_input)
-    if "cookie" in [k.lower() for k in headers_dict.keys()] or "authorization" in [k.lower() for k in headers_dict.keys()]:
+    
+    # Pastikan minimal ada cookie atau authorization
+    keys_lower = [k.lower() for k in headers_dict.keys()]
+    if "cookie" in keys_lower or "authorization" in keys_lower:
         return YTMusic(auth=json.dumps(headers_dict))
     
-    return YTMusic(auth=auth_input)
+    raise ValueError("Tidak ditemukan header 'Cookie' atau 'Authorization' pada teks yang Anda tempelkan. Pastikan Anda meng-copy cURL dari request 'browse' atau 'account_menu'.")
 
 
 # ==========================================
@@ -174,7 +188,7 @@ with st.sidebar:
         "**Tanpa buat file JSON!**\n"
         "1. Buka [music.youtube.com](https://music.youtube.com) (sudah login Google).\n"
         "2. Tekan **F12** (Developer Tools) -> Tab **Network**.\n"
-        "3. Klik kanan request `browse` -> **Copy** -> **Copy as cURL (bash / cmd)**.\n"
+        "3. Klik kanan request `browse` -> **Copy** -> **Copy as cURL (bash)**.\n"
         "4. Paste di kolom *Tempel Request Headers / cURL*."
     )
 
@@ -253,7 +267,7 @@ with tab_setup:
         raw_headers_pasted = st.text_area(
             "Tempelkan cURL / Request Headers di sini:",
             height=200,
-            placeholder="Pilih 'Copy as cURL (bash)' di browser DevTools lalu paste seluruh isinya di sini..."
+            placeholder="Pilih 'Copy as cURL (bash)' pada request 'browse' di browser DevTools lalu paste di sini..."
         )
         if raw_headers_pasted.strip():
             yt_auth_content = raw_headers_pasted.strip()
