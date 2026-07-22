@@ -6,7 +6,6 @@ import pandas as pd
 import time
 import json
 import re
-import os
 
 # ==========================================
 # 1. KONFIGURASI HALAMAN & LAYOUT STREAMLIT
@@ -32,7 +31,7 @@ def check_password():
     if st.session_state["authenticated"]:
         return True
 
-    app_password = st.secrets.get("APP_PASSWORD", os.getenv("APP_PASSWORD", None))
+    app_password = st.secrets.get("APP_PASSWORD", None)
 
     st.markdown("<h2 style='text-align: center;'>🔒 Akses Terbatas (Password Gatekeeper)</h2>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center; color: #888;'>Masukkan password untuk mengakses aplikasi konversi playlist.</p>", unsafe_allow_html=True)
@@ -40,7 +39,7 @@ def check_password():
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if not app_password:
-            st.warning("⚠️ `APP_PASSWORD` belum diset di secrets. Masukkan password sementara untuk masuk.")
+            st.warning("⚠️ `APP_PASSWORD` belum diset di `.streamlit/secrets.toml`. Masukkan password sementara untuk masuk.")
             user_input = st.text_input("Password Sementara", type="password", key="login_pass_input")
             if st.button("Masuk Aplikasi", use_container_width=True):
                 if user_input.strip() != "":
@@ -109,9 +108,7 @@ def fetch_all_spotify_tracks(sp: spotipy.Spotify, playlist_id: str):
 
 
 def parse_raw_headers_to_dict(raw_headers_text: str) -> dict:
-    """
-    Parser otomatis dari Raw Request Headers browser ke Dictionary Python untuk YTMusic.
-    """
+    """Parser otomatis dari Raw Request Headers browser ke Dictionary Python."""
     headers = {}
     lines = raw_headers_text.strip().splitlines()
     for line in lines:
@@ -125,11 +122,8 @@ def parse_raw_headers_to_dict(raw_headers_text: str) -> dict:
 
 
 def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
-    """
-    Inisialisasi YTMusic fleksibel dari JSON String atau Raw Browser Headers Text.
-    """
+    """Inisialisasi YTMusic dari JSON String atau Raw Browser Headers."""
     auth_input = auth_input.strip()
-    
     if auth_input.startswith("{"):
         try:
             auth_dict = json.loads(auth_input)
@@ -162,7 +156,7 @@ with st.sidebar:
         "**Tanpa buat file JSON!**\n"
         "1. Buka [music.youtube.com](https://music.youtube.com) (sudah login Google).\n"
         "2. Tekan **F12** (Developer Tools) -> Tab **Network**.\n"
-        "3. Klik salah satu request (misal `account_menu`) -> Klik kanan -> **Copy request headers**.\n"
+        "3. Klik kanan request (misal `browse`) -> **Copy request headers**.\n"
         "4. Paste di kolom *Tempel Raw Request Headers / String JSON*."
     )
 
@@ -171,25 +165,25 @@ with st.sidebar:
 # 5. ANTARMUKA UTAMA APLIKASI
 # ==========================================
 st.title("🚀 Spotify to YouTube Music Converter")
-st.caption("Pindahkan playlist Spotify favorit Anda ke YouTube Music dengan mudah dan aman.")
+st.caption("Pindahkan playlist Spotify favorit Anda ke YouTube Music dengan mudah dan cepat.")
 
 tab_setup, tab_convert = st.tabs(["1. Konfigurasi Input & Autentikasi", "2. Eksekusi Pemindahan Playlist"])
 
 # --- TAB 1: KONFIGURASI INPUT & AUTENTIKASI ---
 with tab_setup:
-    st.subheader("📋 1. Input Playlist Spotify")
-    
-    # Ambil Client ID & Secret dari Secrets atau Environment Variables
-    env_client_id = st.secrets.get("SPOTIPY_CLIENT_ID", os.getenv("SPOTIPY_CLIENT_ID", ""))
-    env_client_secret = st.secrets.get("SPOTIPY_CLIENT_SECRET", os.getenv("SPOTIPY_CLIENT_SECRET", ""))
-    
-    # Jika sudah diset di secrets/env, sembunyikan kolom input agar pengguna tidak bingung
-    if env_client_id and env_client_secret:
-        client_id = env_client_id
-        client_secret = env_client_secret
-        st.success("🟢 Spotify API Key terdeteksi aktif dari Server Secrets!")
+    st.subheader("📋 1. Input Link Playlist Spotify")
+
+    # Ambil credentials dari st.secrets (jika ada)
+    secret_client_id = st.secrets.get("SPOTIPY_CLIENT_ID", "")
+    secret_client_secret = st.secrets.get("SPOTIPY_CLIENT_SECRET", "")
+
+    # Jika sudah diset di secrets.toml, sembunyikan kolom input dan gunakan otomatis!
+    if secret_client_id and secret_client_secret:
+        client_id = secret_client_id
+        client_secret = secret_client_secret
+        st.success("⚡ Spotify API Credentials otomatis dimuat dari sistem.")
     else:
-        st.warning("⚠️ Credentials Spotify API tidak ditemukan di server secrets. Masukkan manual di bawah ini:")
+        st.info("ℹ️ Spotify API Credentials belum diset di secrets.toml. Masukkan manual di bawah ini jika diperlukan:")
         col_sp1, col_sp2 = st.columns(2)
         with col_sp1:
             client_id = st.text_input("Spotify Client ID", type="password")
@@ -203,7 +197,7 @@ with tab_setup:
 
     if st.button("🔍 Muat Data Playlist Spotify", type="primary"):
         if not client_id or not client_secret:
-            st.error("Masukkan Spotify Client ID dan Client Secret terlebih dahulu.")
+            st.error("Spotify Client ID dan Client Secret belum dikonfigurasi.")
         elif not spotify_url_input:
             st.error("Masukkan URL / Link Playlist Spotify.")
         else:
