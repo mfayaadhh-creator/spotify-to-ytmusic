@@ -135,9 +135,12 @@ def fetch_all_spotify_tracks(sp: spotipy.Spotify, playlist_id: str):
 
 
 def parse_raw_headers_to_dict(raw_headers_text: str) -> dict:
-    """Parser universal untuk men-decode JSON, Raw Headers, atau cURL."""
+    """Parser universal untuk men-decode JSON, Raw Headers, atau cURL (termasuk flag -b / --cookie)."""
     headers = {}
     text_clean = raw_headers_text.replace('^"', '"').replace("^'", "'").replace('^', '')
+
+    # Transformasikan flag -b atau --cookie menjadi -H 'Cookie: ...'
+    text_clean = re.sub(r"(?:-b|--cookie)\s+['\"]?([^'\"\r\n]+)['\"]?", r"-H 'Cookie: \1'", text_clean, flags=re.IGNORECASE)
 
     curl_matches = re.findall(r"(?:-H|--header)\s+['\"]?([^'\"\r\n]+)['\"]?", text_clean, re.IGNORECASE)
     if curl_matches:
@@ -165,15 +168,21 @@ def parse_raw_headers_to_dict(raw_headers_text: str) -> dict:
 
 
 def extract_cookie_string(text: str) -> str:
-    """Mencari string Cookie lengkap dari cURL, Headers, atau Cookie mentah dari Console."""
+    """Mencari string Cookie lengkap dari cURL (-b / -H cookie), Headers, atau Cookie mentah."""
     text_clean = text.strip()
-    text_clean = re.sub(r"^cookie:\s*", "", text_clean, flags=re.IGNORECASE).strip()
     
+    # 1. Cek flag -b atau --cookie dari cURL
+    b_cookie = re.search(r"(?:-b|--cookie)\s+['\"]?([^'\"\r\n]+)['\"]?", text_clean, re.IGNORECASE)
+    if b_cookie:
+        return b_cookie.group(1).strip()
+
+    # 2. Cek -H 'cookie: ...'
     h_cookie = re.search(r"(?:-H|--header)\s+['\"]?cookie:\s*([^'\"]+)['\"]?", text_clean, re.IGNORECASE)
     if h_cookie:
         return h_cookie.group(1).strip()
         
-    for line in text_clean.splitlines():
+    text_clean_sub = re.sub(r"^cookie:\s*", "", text_clean, flags=re.IGNORECASE).strip()
+    for line in text_clean_sub.splitlines():
         line_s = line.strip()
         if line_s.lower().startswith("cookie:"):
             return line_s[7:].strip()
@@ -185,7 +194,7 @@ def extract_cookie_string(text: str) -> str:
 
 
 def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
-    """Inisialisasi YTMusic fleksibel dari cURL, Cookie Console, atau JSON File."""
+    """Inisialisasi YTMusic fleksibel dari cURL (dengan flag -b/-H), Cookie Console, atau JSON File."""
     auth_input = auth_input.strip()
 
     # 1. Coba parse sebagai JSON utuh terlebih dahulu
@@ -210,8 +219,14 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
         except Exception:
             pass
 
-    # 2. Persiapkan string raw headers untuk ytmusicapi.setup
-    headers_raw = auth_input
+    # 2. Transformasikan flag -b atau --cookie menjadi -H 'Cookie: ...' agar parser cURL mengenalnya
+    headers_raw = re.sub(
+        r"(?:-b|--cookie)\s+['\"]?([^'\"\r\n]+)['\"]?",
+        r"-H 'Cookie: \1'",
+        auth_input,
+        flags=re.IGNORECASE
+    )
+
     if not headers_raw.lower().startswith("curl") and not headers_raw.lower().startswith("-h") and "cookie:" not in headers_raw.lower():
         if "sapisid" in headers_raw.lower() or "secure" in headers_raw.lower() or "sid=" in headers_raw.lower():
             headers_raw = f"Cookie: {headers_raw}"
@@ -231,7 +246,7 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
             except Exception:
                 pass
 
-        # Fallback manual parsing
+        # Fallback manual parsing jika yt_setup mengalami kendala
         headers_dict = parse_raw_headers_to_dict(auth_input)
         cookie_val = extract_cookie_string(auth_input)
         
@@ -242,22 +257,29 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
                     break
 
         if not cookie_val:
-            raise ValueError("⚠️ Header/Cookie tidak dapat dibaca. Gunakan 'Copy as cURL (bash)' dari tab Network (F12).")
+            raise ValueError("⚠️ Header/Cookie tidak dapat dibaca dari cURL. Pastikan cURL menyertakan flag -b atau -H Cookie.")
 
         auth_dict = DEFAULT_HEADERS.copy()
         auth_dict["User-Agent"] = headers_dict.get("User-Agent", headers_dict.get("user-agent", DEFAULT_HEADERS["User-Agent"]))
         auth_dict["Cookie"] = cookie_val
         auth_dict["cookie"] = cookie_val
 
-        sapisid_match = re.search(r"(?:SAPISID|__Secure-3PAPISID)=([^;\s]+)", cookie_val)
-        if sapisid_match:
-            sapisid = sapisid_match.group(1)
-            timestamp = str(int(time.time()))
-            payload = f"{timestamp} {sapisid} https://music.youtube.com"
-            auth_hash = hashlib.sha1(payload.encode("utf-8")).hexdigest()
-            auth_header = f"SAPISIDHASH {timestamp}_{auth_hash}"
-            auth_dict["Authorization"] = auth_header
-            auth_dict["authorization"] = auth_header
+        if "authorization" in [k.lower() for k in headers_dict.keys()]:
+            for k, v in headers_dict.items():
+                if k.lower() == "authorization":
+                    auth_dict["Authorization"] = v
+                    auth_dict["authorization"] = v
+                    break
+        else:
+            sapisid_match = re.search(r"(?:SAPISID|__Secure-3PAPISID)=([^;\s]+)", cookie_val)
+            if sapisid_match:
+                sapisid = sapisid_match.group(1)
+                timestamp = str(int(time.time()))
+                payload = f"{timestamp} {sapisid} https://music.youtube.com"
+                auth_hash = hashlib.sha1(payload.encode("utf-8")).hexdigest()
+                auth_header = f"SAPISIDHASH {timestamp}_{auth_hash}"
+                auth_dict["Authorization"] = auth_header
+                auth_dict["authorization"] = auth_header
 
         with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(auth_dict, f)
