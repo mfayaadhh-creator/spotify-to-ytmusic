@@ -10,6 +10,14 @@ import tempfile
 import os
 import hashlib
 
+try:
+    from ytmusicapi import setup as yt_setup
+except ImportError:
+    try:
+        from ytmusicapi.setup import setup as yt_setup
+    except ImportError:
+        yt_setup = None
+
 # ==========================================
 # 1. KONFIGURASI HALAMAN & LAYOUT STREAMLIT
 # ==========================================
@@ -94,7 +102,6 @@ def fetch_all_spotify_tracks(sp: spotipy.Spotify, playlist_id: str):
     """Mengambil seluruh lagu dari playlist Spotify (Pagination 2.000+ lagu)."""
     playlist_info = {"name": "Spotify Playlist", "description": ""}
     
-    # Coba ambil metadata playlist (fallback jika 403)
     try:
         playlist_info = sp.playlist(playlist_id, fields="name,description,tracks.total")
     except Exception:
@@ -180,41 +187,69 @@ def extract_cookie_string(text: str) -> str:
 def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
     """Inisialisasi YTMusic fleksibel dari cURL, Cookie Console, atau JSON File."""
     auth_input = auth_input.strip()
-    auth_dict = None
 
-    # 1. Coba parse sebagai JSON utuh
+    # 1. Coba parse sebagai JSON utuh terlebih dahulu
     if auth_input.startswith("{"):
         try:
             auth_dict = json.loads(auth_input)
+            if isinstance(auth_dict, dict):
+                temp_file = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json")
+                try:
+                    json.dump(auth_dict, temp_file)
+                    temp_file.flush()
+                    temp_file.close()
+                    yt_instance = YTMusic(auth=temp_file.name)
+                    yt_instance.get_library_playlists(limit=1)
+                    return yt_instance
+                finally:
+                    if os.path.exists(temp_file.name):
+                        try:
+                            os.remove(temp_file.name)
+                        except Exception:
+                            pass
         except Exception:
             pass
 
-    # 2. Jika bukan JSON utuh, parse cURL / Cookie String
-    if not isinstance(auth_dict, dict):
+    # 2. Persiapkan string raw headers untuk ytmusicapi.setup
+    headers_raw = auth_input
+    if not headers_raw.lower().startswith("curl") and not headers_raw.lower().startswith("-h") and "cookie:" not in headers_raw.lower():
+        if "sapisid" in headers_raw.lower() or "secure" in headers_raw.lower() or "sid=" in headers_raw.lower():
+            headers_raw = f"Cookie: {headers_raw}"
+
+    temp_file = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json")
+    temp_path = temp_file.name
+    temp_file.close()
+
+    try:
+        # Gunakan official ytmusicapi setup jika tersedia
+        if yt_setup is not None:
+            try:
+                yt_setup(filepath=temp_path, headers_raw=headers_raw)
+                yt_instance = YTMusic(auth=temp_path)
+                yt_instance.get_library_playlists(limit=1)
+                return yt_instance
+            except Exception:
+                pass
+
+        # Fallback manual parsing
         headers_dict = parse_raw_headers_to_dict(auth_input)
-        cookie_val = ""
-        for k, v in headers_dict.items():
-            if k.lower() == "cookie":
-                cookie_val = v
-                break
-                
-        if not cookie_val:
-            cookie_val = extract_cookie_string(auth_input)
-            
-        if cookie_val:
-            auth_dict = DEFAULT_HEADERS.copy()
-            auth_dict["Cookie"] = cookie_val
+        cookie_val = extract_cookie_string(auth_input)
+        
+        if not cookie_val and "cookie" in [k.lower() for k in headers_dict.keys()]:
             for k, v in headers_dict.items():
-                if k.lower() == "authorization":
-                    auth_dict["Authorization"] = v
+                if k.lower() == "cookie":
+                    cookie_val = v
+                    break
 
-    if not auth_dict or not isinstance(auth_dict, dict):
-        raise ValueError("⚠️ Header/Cookie tidak dapat dibaca. Gunakan 'Copy as cURL (bash)' dari tab Network (F12).")
+        if not cookie_val:
+            raise ValueError("⚠️ Header/Cookie tidak dapat dibaca. Gunakan 'Copy as cURL (bash)' dari tab Network (F12).")
 
-    # Hitung SAPISIDHASH secara otomatis jika Authorization belum ada
-    cookie_str = auth_dict.get("Cookie", auth_dict.get("cookie", ""))
-    if "Authorization" not in auth_dict and "authorization" not in auth_dict and cookie_str:
-        sapisid_match = re.search(r"(?:SAPISID|__Secure-3PAPISID)=([^;\s]+)", cookie_str)
+        auth_dict = DEFAULT_HEADERS.copy()
+        auth_dict["User-Agent"] = headers_dict.get("User-Agent", headers_dict.get("user-agent", DEFAULT_HEADERS["User-Agent"]))
+        auth_dict["Cookie"] = cookie_val
+        auth_dict["cookie"] = cookie_val
+
+        sapisid_match = re.search(r"(?:SAPISID|__Secure-3PAPISID)=([^;\s]+)", cookie_val)
         if sapisid_match:
             sapisid = sapisid_match.group(1)
             timestamp = str(int(time.time()))
@@ -224,44 +259,29 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
             auth_dict["Authorization"] = auth_header
             auth_dict["authorization"] = auth_header
 
-    # Pastikan key standar ada di kedua format case
-    if "Cookie" in auth_dict:
-        auth_dict["cookie"] = auth_dict["Cookie"]
-    if "cookie" in auth_dict:
-        auth_dict["Cookie"] = auth_dict["cookie"]
-    if "User-Agent" in auth_dict:
-        auth_dict["user-agent"] = auth_dict["User-Agent"]
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(auth_dict, f)
 
-    # Buat file sementara, flush & close agar file lengkap terisi sebelum dibaca ytmusicapi
-    temp_file = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json")
-    try:
-        json.dump(auth_dict, temp_file)
-        temp_file.flush()
-        temp_file.close()
-        
-        yt_instance = YTMusic(auth=temp_file.name)
-        
-        # Tes koneksi login (apakah cookie valid & punya akses membuat playlist)
-        try:
-            yt_instance.get_library_playlists(limit=1)
-        except Exception as test_err:
-            err_text = str(test_err)
-            if "401" in err_text or "Unauthorized" in err_text or "signed in" in err_text:
-                raise ValueError(
-                    "❌ Autentikasi YouTube Music Gagal (HTTP 401 Unauthorized):\n"
-                    "Cookie yang dimasukkan tidak memiliki cookie keamanan `HttpOnly` (seperti SID/HSID/SSID).\n\n"
-                    "👉 **Solusi Pasti**: Jangan gunakan `document.cookie` di Console.\n"
-                    "Gunakan **Copy as cURL (bash)** dari **Tab Network (F12)** pada request `browse` saat sudah login!"
-                )
-            # Jika error biasa lainnya, teruskan instance
+        yt_instance = YTMusic(auth=temp_path)
+        yt_instance.get_library_playlists(limit=1)
+        return yt_instance
+
+    except Exception as err:
+        err_str = str(err)
+        if "401" in err_str or "Unauthorized" in err_str or "signed in" in err_str:
+            raise ValueError(
+                "❌ Autentikasi YouTube Music Gagal (HTTP 401 Unauthorized):\n"
+                "Cookie yang dimasukkan tidak memiliki cookie keamanan `HttpOnly` (seperti SID/HSID/SSID).\n\n"
+                "👉 **Solusi Pasti**: Gunakan **Copy as cURL (bash)** dari **Tab Network (F12)** pada request `browse` saat sudah login!"
+            )
+        raise ValueError(f"Autentikasi YouTube Music Gagal: {err_str}")
+
     finally:
-        if os.path.exists(temp_file.name):
+        if os.path.exists(temp_path):
             try:
-                os.remove(temp_file.name)
+                os.remove(temp_path)
             except Exception:
                 pass
-
-    return yt_instance
 
 
 # ==========================================
