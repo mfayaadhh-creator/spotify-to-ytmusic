@@ -139,7 +139,6 @@ def parse_raw_headers_to_dict(raw_headers_text: str) -> dict:
     headers = {}
     text_clean = raw_headers_text.replace('^"', '"').replace("^'", "'").replace('^', '')
 
-    # Transformasikan flag -b atau --cookie menjadi -H 'Cookie: ...'
     text_clean = re.sub(r"(?:-b|--cookie)\s+['\"]?([^'\"\r\n]+)['\"]?", r"-H 'Cookie: \1'", text_clean, flags=re.IGNORECASE)
 
     curl_matches = re.findall(r"(?:-H|--header)\s+['\"]?([^'\"\r\n]+)['\"]?", text_clean, re.IGNORECASE)
@@ -171,12 +170,10 @@ def extract_cookie_string(text: str) -> str:
     """Mencari string Cookie lengkap dari cURL (-b / -H cookie), Headers, atau Cookie mentah."""
     text_clean = text.strip()
     
-    # 1. Cek flag -b atau --cookie dari cURL
     b_cookie = re.search(r"(?:-b|--cookie)\s+['\"]?([^'\"\r\n]+)['\"]?", text_clean, re.IGNORECASE)
     if b_cookie:
         return b_cookie.group(1).strip()
 
-    # 2. Cek -H 'cookie: ...'
     h_cookie = re.search(r"(?:-H|--header)\s+['\"]?cookie:\s*([^'\"]+)['\"]?", text_clean, re.IGNORECASE)
     if h_cookie:
         return h_cookie.group(1).strip()
@@ -193,6 +190,24 @@ def extract_cookie_string(text: str) -> str:
     return ""
 
 
+def force_desktop_headers(file_path: str):
+    """
+    Memastikan User-Agent pada headers_auth.json selalu menggunakan Desktop User-Agent.
+    Jika cURL di-copy dari Mobile Emulation (Android/Pixel/iPhone), ytmusicapi akan gagal
+    parsing pencarian karena YouTube mengirim skema JSON Mobile.
+    """
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            data["User-Agent"] = DEFAULT_HEADERS["User-Agent"]
+            data["user-agent"] = DEFAULT_HEADERS["User-Agent"]
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+    except Exception:
+        pass
+
+
 def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
     """Inisialisasi YTMusic fleksibel dari cURL (dengan flag -b/-H), Cookie Console, atau JSON File."""
     auth_input = auth_input.strip()
@@ -207,6 +222,7 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
                     json.dump(auth_dict, temp_file)
                     temp_file.flush()
                     temp_file.close()
+                    force_desktop_headers(temp_file.name)
                     yt_instance = YTMusic(auth=temp_file.name)
                     yt_instance.get_library_playlists(limit=1)
                     return yt_instance
@@ -240,6 +256,7 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
         if yt_setup is not None:
             try:
                 yt_setup(filepath=temp_path, headers_raw=headers_raw)
+                force_desktop_headers(temp_path)
                 yt_instance = YTMusic(auth=temp_path)
                 yt_instance.get_library_playlists(limit=1)
                 return yt_instance
@@ -260,7 +277,7 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
             raise ValueError("⚠️ Header/Cookie tidak dapat dibaca dari cURL. Pastikan cURL menyertakan flag -b atau -H Cookie.")
 
         auth_dict = DEFAULT_HEADERS.copy()
-        auth_dict["User-Agent"] = headers_dict.get("User-Agent", headers_dict.get("user-agent", DEFAULT_HEADERS["User-Agent"]))
+        auth_dict["User-Agent"] = DEFAULT_HEADERS["User-Agent"]
         auth_dict["Cookie"] = cookie_val
         auth_dict["cookie"] = cookie_val
 
@@ -284,6 +301,7 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
         with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(auth_dict, f)
 
+        force_desktop_headers(temp_path)
         yt_instance = YTMusic(auth=temp_path)
         yt_instance.get_library_playlists(limit=1)
         return yt_instance
@@ -496,15 +514,27 @@ with tab_convert:
                 status_text.markdown(f"⌛ Processing ({idx+1}/{total_tracks}): **{track_title}** - *{track_artist}*")
 
                 try:
+                    # 1. Coba pencarian dengan filter "songs"
                     search_results = ytmusic.search(query=query, filter="songs")
-                    if search_results and len(search_results) > 0:
-                        video_id = search_results[0].get("videoId")
-                        if video_id:
-                            current_batch.append(video_id)
-                            success_count += 1
-                        else:
-                            fail_count += 1
-                            failed_tracks.append({"title": track_title, "artist": track_artist, "reason": "videoId tidak ditemukan"})
+                    
+                    # 2. Fallback jika filter "songs" tidak mengembalikan hasil
+                    if not search_results:
+                        search_results = ytmusic.search(query=query)
+                        
+                    # 3. Fallback pencarian hanya dengan Judul Lagu
+                    if not search_results and track_title:
+                        search_results = ytmusic.search(query=track_title, filter="songs")
+
+                    video_id = None
+                    if search_results:
+                        for res in search_results:
+                            if res.get("videoId"):
+                                video_id = res.get("videoId")
+                                break
+
+                    if video_id:
+                        current_batch.append(video_id)
+                        success_count += 1
                     else:
                         fail_count += 1
                         failed_tracks.append({"title": track_title, "artist": track_artist, "reason": "Lagu tidak ditemukan di YouTube Music"})
