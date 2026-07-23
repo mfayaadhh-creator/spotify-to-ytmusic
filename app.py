@@ -209,7 +209,7 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
                     auth_dict["Authorization"] = v
 
     if not auth_dict or not isinstance(auth_dict, dict):
-        raise ValueError("⚠️ Cookie tidak dapat dibaca. Pastikan Anda menempelkan hasil dari `copy(document.cookie)` di tab Console.")
+        raise ValueError("⚠️ Header/Cookie tidak dapat dibaca. Gunakan 'Copy as cURL (bash)' dari tab Network (F12).")
 
     # Hitung SAPISIDHASH secara otomatis jika Authorization belum ada
     cookie_str = auth_dict.get("Cookie", auth_dict.get("cookie", ""))
@@ -240,6 +240,20 @@ def init_ytmusic_from_any_input(auth_input: str) -> YTMusic:
         temp_file.close()
         
         yt_instance = YTMusic(auth=temp_file.name)
+        
+        # Tes koneksi login (apakah cookie valid & punya akses membuat playlist)
+        try:
+            yt_instance.get_library_playlists(limit=1)
+        except Exception as test_err:
+            err_text = str(test_err)
+            if "401" in err_text or "Unauthorized" in err_text or "signed in" in err_text:
+                raise ValueError(
+                    "❌ Autentikasi YouTube Music Gagal (HTTP 401 Unauthorized):\n"
+                    "Cookie yang dimasukkan tidak memiliki cookie keamanan `HttpOnly` (seperti SID/HSID/SSID).\n\n"
+                    "👉 **Solusi Pasti**: Jangan gunakan `document.cookie` di Console.\n"
+                    "Gunakan **Copy as cURL (bash)** dari **Tab Network (F12)** pada request `browse` saat sudah login!"
+                )
+            # Jika error biasa lainnya, teruskan instance
     finally:
         if os.path.exists(temp_file.name):
             try:
@@ -263,12 +277,14 @@ with st.sidebar:
         st.rerun()
         
     st.divider()
-    st.markdown("### ⚡ Cara Paling Pasti (1 Klik)")
+    st.markdown("### ⚡ Cara Ambil Auth YT Music (Pasti Berhasil)")
     st.markdown(
-        "1. Buka [music.youtube.com](https://music.youtube.com).\n"
-        "2. Tekan **F12** -> Tab **Console**.\n"
-        "3. Ketik: `copy(document.cookie)` lalu Enter.\n"
-        "4. **Paste** di kolom *Tempel Cookie / cURL*."
+        "1. Buka [music.youtube.com](https://music.youtube.com) (sudah login akun Google).\n"
+        "2. Tekan **F12** -> Tab **Network**.\n"
+        "3. Klik kanan request `browse` -> **Copy** -> **Copy as cURL (bash)**.\n"
+        "4. **Paste** di kolom *Tempel cURL / Request Headers*.\n\n"
+        "⚠️ *Catatan: Jangan pakai `document.cookie` di console karena browser menyembunyikan Cookie HttpOnly (SID/SSID).* "
+        "Matikan AdBlocker/Brave Shields jika koneksi terblokir."
     )
 
 
@@ -345,17 +361,17 @@ with tab_setup:
 
     auth_method = st.radio(
         "Pilih Metode Autentikasi YT Music:",
-        ["Tempel (Paste) Cookie Browser / cURL / JSON (Paling Praktis)", "Unggah File (headers_auth.json / oauth.json)"],
+        ["Tempel (Paste) cURL / Request Headers Browser (Paling Praktis)", "Unggah File (headers_auth.json / oauth.json)"],
         horizontal=True
     )
 
     yt_auth_content = None
 
-    if auth_method == "Tempel (Paste) Cookie Browser / cURL / JSON (Paling Praktis)":
+    if auth_method == "Tempel (Paste) cURL / Request Headers Browser (Paling Praktis)":
         raw_headers_pasted = st.text_area(
-            "Tempelkan Cookie Browser / cURL di sini:",
+            "Tempelkan cURL / Request Headers di sini:",
             height=180,
-            placeholder="Salin hasil 'copy(document.cookie)' dari F12 Console atau cURL lalu tempelkan di sini..."
+            placeholder="Salin hasil 'Copy as cURL (bash)' dari request 'browse' di Tab Network (F12) lalu paste di sini..."
         )
         if raw_headers_pasted.strip():
             yt_auth_content = raw_headers_pasted.strip()
@@ -371,10 +387,10 @@ with tab_setup:
         try:
             ytmusic_instance = init_ytmusic_from_any_input(yt_auth_content)
             st.session_state["ytmusic"] = ytmusic_instance
-            st.success("✅ Autentikasi YouTube Music Berhasil Ditautkan ke Sesi!")
+            st.success("✅ Autentikasi YouTube Music Berhasil Ditautkan & Terverifikasi Aktif!")
         except Exception as e:
             st.session_state["ytmusic"] = None
-            st.error(f"❌ Autentikasi YouTube Music Gagal: {e}")
+            st.error(f"{e}")
 
 
 # --- TAB 2: EKSEKUSI PEMINDAHAN PLAYLIST ---
